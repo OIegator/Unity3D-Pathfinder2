@@ -1,6 +1,5 @@
-﻿using System.Collections;
+﻿using Priority_Queue;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using UnityEngine;
 
 namespace BaseAI
@@ -24,7 +23,7 @@ namespace BaseAI
         /// <param name="destination">Целевой регион</param>
         /// <param name="movementProperties">Параметры движения</param>
         /// <returns>Список точек маршрута</returns>
-        public List<PathNode> FindPath(PathNode start, BaseRegion destination, MovementProperties movementProperties)
+        public List<PathNode> FindPath(PathNode start, IBaseRegion destination, MovementProperties movementProperties)
         {
             //  Реализовать что-то наподобие A* тут
             //  Можно попробовать и по-другому, например, с помощью NaviMesh. Только оно с динамическим регионом не сработает
@@ -122,29 +121,27 @@ namespace BaseAI
         /// <param name="node"></param>
         /// <param name="properties"></param>
         /// <returns></returns>
-        public List<PathNode> GetNeighbours(PathNode node, MovementProperties properties)
+        public IEnumerable<PathNode> GetNeighbours(PathNode node, MovementProperties properties)
         {
             //  Вот тут хардкодить не надо, это должно быть в properties
             //  У нас есть текущая точка, и свойства движения (там скорость, всякое такое)
             //float step = 1f;
-            float step = properties.deltaTime * properties.maxSpeed;
-
-            List<PathNode> result = new List<PathNode>();
+            var step = properties.deltaTime * properties.maxSpeed;
 
             //  Внешний цикл отвечает за длину шага - либо 0 (остаёмся в точке), либо 1 - шагаем вперёд
-            for (int mult = 0; mult <= 1; ++mult)
+            for (var mult = 0; mult <= 1; ++mult)
                 //  Внутренний цикл перебирает углы поворота
-                for (int angleStep = -properties.angleSteps; angleStep <= properties.angleSteps; ++angleStep)
+            for (var angleStep = -properties.angleSteps; angleStep <= properties.angleSteps; ++angleStep)
+            {
+                var next = node.SpawnChildren(step * mult, angleStep * properties.rotationAngle, properties.deltaTime);
+                next.Parent = node;
+                //  Точка передаётся по ссылке, т.к. возможно обновление региона, которому она принадлежит
+                if (CheckWalkable(ref next))
                 {
-                    PathNode next = node.SpawnChildren(step * mult, angleStep * properties.rotationAngle, properties.deltaTime);
-                    //  Точка передаётся по ссылке, т.к. возможно обновление региона, которому она принадлежит
-                    if (CheckWalkable(ref next))
-                    {
-                        result.Add(next);
-                        Debug.DrawLine(node.Position, next.Position, Color.blue, 10f);
-                    }
+                    yield return next;
+                    Debug.DrawLine(node.Position, next.Position, Color.blue, 10000f, false);
                 }
-            return result;
+            }
         }
 
         /// <summary>
@@ -153,16 +150,67 @@ namespace BaseAI
         /// </summary>
         private bool FindPath(PathNode start, PathNode target, MovementProperties movementProperties, UpdatePathListDelegate updater)
         {
-            /*
-            List<PathNode> result = new List<PathNode>();
+
+            Debug.Log($"Start distance = {Vector3.Distance(start.Position, target.Position)}");
+            var result = new List<PathNode>();
+
+            var nodes = new SimplePriorityQueue<PathNode>();
+            nodes.Enqueue(start, Vector3.Distance(start.Position, target.Position));
+
+            PathNode res = null;
+
+            var i = 0;
+            var minDist = float.MaxValue;
+            PathNode minDistNode = null;
+            while (nodes.Count > 0 && i < 10000)
+            {
+                i++;
+                var current = nodes.Dequeue();
+                if (Vector3.Distance(current.Position, target.Position) < 5.0)
+                {
+                    res = current;
+                    break;
+                }
+
+                var neighbours = GetNeighbours(current, movementProperties);
+                foreach (var neighbor in neighbours)
+                {
+                    var newDist = Vector3.Distance(neighbor.Position, target.Position);
+                    nodes.Enqueue(neighbor, newDist);
+                    if (newDist < minDist)
+                    {
+                        minDist = newDist;
+                        minDistNode = neighbor;
+                    }
+
+                }
+            }
+
+            if (res == null)
+            {
+                result.Add(minDistNode);
+                Debug.Log($"res == null, minDist = {minDist}");
+            }
+            else
+            {
+                Debug.Log($"i = {i}");
+                while (res != null)
+                {
+                    result.Add(res);
+                    res = res.Parent;
+                }
+
+                result.Reverse();
+            }
 
             updater(result);
 
             Debug.Log("Маршрут обновлён");
-            Debug.Log("Финальная точка маршрута : " + result[result.Count-1].Position.ToString() + "; target : " + target.Position.ToString());
-            return;
-            */
-            //  Вызываем обновление пути. Теоретически мы обращаемся к списку из другого потока, надо бы синхронизировать как-то
+            Debug.Log("Финальная точка маршрута : " + result[result.Count - 1].Position.ToString() + "; target : " + target.Position.ToString());
+            return true;
+
+            //Вызываем обновление пути.Теоретически мы обращаемся к списку из другого потока, надо бы синхронизировать как - то
+
         }
 
         /// <summary>
