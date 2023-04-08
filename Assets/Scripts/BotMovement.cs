@@ -324,7 +324,7 @@ public class BotMovement : MonoBehaviour
             if (currentTarget.Distance(transform.position) < movementProperties.epsilon)
                 return true;
 
-            transform.position = transform.position + actualStep * transform.forward / remainedTime;
+            transform.position = transform.position + actualStep * transform.forward;
         }
         return true;
     }
