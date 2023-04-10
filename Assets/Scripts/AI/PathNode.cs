@@ -42,7 +42,7 @@ namespace BaseAI
         /// Конструирование вершины на основе родительской (если она указана)
         /// </summary>
         /// <param name="ParentNode">Если существует родительская вершина, то её указываем</param>
-        public PathNode(Vector3 currentPosition, Vector3 currentDirection)
+        public PathNode(Vector3 currentPosition, Vector3 currentDirection, bool jumpNode = false)
         {
             Position = currentPosition;      //  Позицию задаём
             Direction = currentDirection;    //  Направление отсутствует
@@ -50,6 +50,7 @@ namespace BaseAI
             Parent = null;                   //  Родителя нет
             RegionIndex = -1;
             H = 0;
+            JumpNode = jumpNode;
         }
 
         /// <summary>

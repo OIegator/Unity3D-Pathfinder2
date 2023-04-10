@@ -1,4 +1,6 @@
 ﻿using System.Collections;
+using Priority_Queue;
+using System.Linq;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -45,6 +47,8 @@ namespace BaseAI
         /// </summary>
         /// <param name="node"></param>
         /// <returns></returns>
+        void TransformToLocal(PathNode node);
+
         float SqrDistanceTo(PathNode node);
 
         /// <summary>
@@ -68,6 +72,10 @@ namespace BaseAI
         /// </summary>
         /// <returns></returns>
         Vector3 GetCenter();
+
+        Collider Collider { get; }
+
+        List<PathNode> FindPath(PathNode start, PathNode target, MovementProperties movementProperties, PathFinder context);
     }
 
     /// <summary>
@@ -79,7 +87,10 @@ namespace BaseAI
         /// Тело региона - коллайдер
         /// </summary>
         public SphereCollider body;
-        
+
+        public Collider Collider => body;
+
+        public Platform1Movement PlatformMovement;
         /// <summary>
         /// Расстояние транзита через регион
         /// </summary>
@@ -92,6 +103,8 @@ namespace BaseAI
 
         bool IBaseRegion.Dynamic { get; } = false;
         void IBaseRegion.TransformPoint(PathNode parent, PathNode node) { return; }
+
+        void IBaseRegion.TransformToLocal(PathNode node) { }
 
         public IList<IBaseRegion> Neighbors { get; set; } = new List<IBaseRegion>();
 
@@ -137,6 +150,46 @@ namespace BaseAI
         {
             throw new System.NotImplementedException();
         }
+
+        enum State
+        {
+            NotStarted,
+            JumpedOnPlatform,
+            JumpOnShore,
+        }
+
+        private State state = State.NotStarted;
+
+        public List<PathNode> FindPath(PathNode start, PathNode target, MovementProperties movementProperties, PathFinder context)
+        {
+            if (state == State.NotStarted)
+            {
+
+                var predicted = new PathNode(PlatformMovement.PredictLocation(1.0f), start.Direction, true);
+                var dist = context.Distance(predicted, start, movementProperties);
+                if (dist < 8.0)
+                {
+                    state = State.JumpedOnPlatform;
+                    predicted.JumpNode = true;
+                    return new List<PathNode> { predicted };
+                }
+            }
+            else if (state == State.JumpedOnPlatform)
+            {
+                var dist = context.Distance(start, target, movementProperties);
+                if (dist < 10.0)
+                {
+                    Debug.Log("Can jump from platform");
+                    state = State.JumpedOnPlatform;
+                    target.JumpNode = true;
+                    return new List<PathNode> { target };
+                }
+            }
+
+            var result = new List<PathNode>();
+
+            return result;
+        }
     }
     
     /// <summary>
@@ -148,7 +201,9 @@ namespace BaseAI
         /// Тело коллайдера для представления региона
         /// </summary>
         public BoxCollider body;
-        
+
+        public Collider Collider => body;
+
         /// <summary>
         /// Индекс региона в списке регионов
         /// </summary>
@@ -156,7 +211,7 @@ namespace BaseAI
         
         bool IBaseRegion.Dynamic { get; } = false;
         void IBaseRegion.TransformPoint(PathNode parent, PathNode node) { return; }
-
+        void IBaseRegion.TransformToLocal(PathNode node) { }
         public IList<IBaseRegion> Neighbors { get; set; } = new List<IBaseRegion>();
         
         /// <summary>
@@ -206,6 +261,75 @@ namespace BaseAI
         {
             throw new System.NotImplementedException();
         }
+
+
+        public List<PathNode> FindPath(PathNode start, PathNode target, MovementProperties movementProperties, PathFinder context)
+        {
+            var result = new List<PathNode>();
+
+            var nodes = new SimplePriorityQueue<PathNode>();
+            nodes.Enqueue(start, Vector3.Distance(start.Position, target.Position));
+
+            PathNode res = null;
+
+            var i = 0;
+            var minDist = float.MaxValue;
+            PathNode minDistNode = null;
+            while (nodes.Count > 0 && i < 10000)
+            {
+                i++;
+                var current = nodes.Dequeue();
+                if (Vector3.Distance(current.Position, target.Position) < movementProperties.deltaTime * movementProperties.maxSpeed / movementProperties.closeEnslowment)
+                {
+                    res = current;
+                    break;
+                }
+
+
+                var backupSpeed = movementProperties.maxSpeed;
+                if (Vector3.Distance(current.Position, target.Position) < movementProperties.targetClose)
+                {
+                    movementProperties.maxSpeed = backupSpeed / movementProperties.closeEnslowment;
+                }
+
+                var neighbours = context.GetNeighbours(current, movementProperties);
+                foreach (var neighbor in neighbours)
+                {
+                    var newDist = Vector3.Distance(neighbor.Position, target.Position);
+                    nodes.Enqueue(neighbor, newDist);
+                    if (newDist < minDist)
+                    {
+                        minDist = newDist;
+                        minDistNode = neighbor;
+                        res = minDistNode;
+                    }
+
+                }
+
+                movementProperties.maxSpeed = backupSpeed;
+            }
+
+            if (res == null)
+            {
+                result.Add(minDistNode);
+            }
+            else
+            {
+                Debug.Log($"Count of steps = {i}");
+                while (res != null)
+                {
+                    result.Add(res);
+                    res = res.Parent;
+                }
+
+                result.Reverse();
+            }
+
+            Debug.Log("Маршрут обновлён");
+            Debug.Log("Финальная точка маршрута : " + result[result.Count - 1].Position.ToString() + "; target : " + target.Position.ToString());
+            return result;
+
+        }
     }
 
     public class Cartographer
@@ -237,41 +361,45 @@ namespace BaseAI
             //  не сработает для динамических регионов (коллайдеры которых перемещаются) - они автоматически не установят связи.
             //  Поэтому открываем картинку RegionsMap.png в корне проекта, и ручками дорисовываем регионы, и связи между ними.
 
-            var colliders = collidersCollection.GetComponents<Collider>();
+            var colliders = collidersCollection.GetComponentsInChildren<Collider>();
             foreach (var collider in colliders)
             {
-                if (collider.GetType() == typeof(BoxCollider)) {
-                    regions.Add(new BoxRegion((BoxCollider)collider));
-                    regions[regions.Count - 1].index = regions.Count - 1;
-                    continue;
-                }
-                if (collider.GetType() == typeof(SphereCollider))
+                IBaseRegion region;
+
+                switch (collider)
                 {
-                    regions.Add(new SphereRegion((SphereCollider)collider));
-                    regions[regions.Count - 1].index = regions.Count - 1; 
-                    continue;
+                    case BoxCollider boxCollider:
+                        region = new BoxRegion(boxCollider);
+                        break;
+                    case SphereCollider sphereCollider:
+                        region = new SphereRegion(sphereCollider)
+                        {
+                            PlatformMovement = sphereCollider.gameObject.GetComponent<Platform1Movement>()
+                        };
+                        break;
+                    default:
+                        throw new System.Exception("Only Box and Sphere colliders are allowed.");
                 }
 
-                throw new System.Exception("You can't add any other types of colliders except of Box and Sphere!");
+                regions.Add(region);
+                regions[regions.Count - 1].index = regions.Count - 1;
             }
 
-            //  Настраиваем связи между регионами - не самая лучшая идея, но для крупных регионов сойдёт
-            regions[0].Neighbors.Add(regions[1]);
-            regions[0].Neighbors.Add(regions[3]);
 
-            regions[1].Neighbors.Add(regions[0]);
-            regions[1].Neighbors.Add(regions[2]);
+            for (var i = 0; i < regions.Count; i++)
+                for (var j = i + 1; j < regions.Count; j++)
+                    if (regions[i].Collider.bounds.Intersects(regions[j].Collider.bounds))
+                    {
+                        regions[i].Neighbors.Add(regions[j]);
+                        regions[j].Neighbors.Add(regions[i]);
+                    }
 
-            regions[2].Neighbors.Add(regions[1]);
-            regions[2].Neighbors.Add(regions[4]);
+            for (var i = 0; i < regions.Count; i++)
+            {
+                Debug.Log(
+                    $"Region : {i} ({regions[i].GetType()}, {regions[i].GetCenter()}) -> {string.Join(", ", regions[i].Neighbors.Select(it => it.index))}");
+            }
 
-            regions[3].Neighbors.Add(regions[0]);
-
-            regions[4].Neighbors.Add(regions[2]);
-
-
-            //  Платформы потом. Для них реализовать класс "BaseRegion", и его подсовывать в этот список, обновляя 
-            //  списки смежности
         }
 
         /// <summary>

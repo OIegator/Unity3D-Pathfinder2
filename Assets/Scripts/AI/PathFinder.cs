@@ -37,11 +37,6 @@ namespace BaseAI
     public class PathFinder : MonoBehaviour
     {
         /// <summary>
-        /// Объект сцены, на котором размещены коллайдеры
-        /// </summary>
-        [SerializeField] private GameObject CollidersCollection;
-
-        /// <summary>
         /// Картограф - класс, хранящий информацию о геометрии уровня, регионах и прочем
         /// </summary>
         [SerializeField] private Cartographer сartographer;
@@ -66,21 +61,24 @@ namespace BaseAI
         /// </summary>
         /// <param name="node">Точка</param>
         /// <returns></returns>
-        private bool CheckWalkable(ref PathNode node)
+        private int CheckWalkable(PathNode node)
         {
             //  Сначала проверяем, принадлежит ли точка какому-то региону
             int regionInd = -1;
             //  Первая проверка - того региона, который в точке указан, это будет быстрее
-            if(node.RegionIndex >= 0 && node.RegionIndex < сartographer.regions.Count)
+            if (node.RegionIndex >= 0)
             {
                 if (сartographer.regions[node.RegionIndex].Contains(node))
                     regionInd = node.RegionIndex;
-            } else
+            }
+
+            if (regionInd == -1)
             {
                 var region = сartographer.GetRegion(node);
                 if (region != null) regionInd = region.index;
             }
-            if (regionInd == -1) return false;
+
+            if (regionInd == -1) return 1;
             node.RegionIndex = regionInd;
 
             //  Следующая проверка - на то, что над поверхностью расстояние не слишком большое
@@ -91,7 +89,7 @@ namespace BaseAI
             if (distToFloor > 2.0f || distToFloor < 0.0f)
             {
                 //Debug.Log("Incorrect node height");
-                return false;
+                return 2;
             }
 
             //  Ну и осталось проверить препятствия - для движущихся не сработает такая штука, потому что проверка выполняется для
@@ -101,10 +99,8 @@ namespace BaseAI
 
             //if (node.Parent != null && Physics.CheckSphere(node.Position, 2.0f, obstaclesLayerMask))
             //if (node.Parent != null && Physics.Linecast(node.Parent.Position, node.Position, obstaclesLayerMask))
-            if (node.Parent != null && Physics.CheckSphere(node.Position, 1.0f, obstaclesLayerMask))
-                return false;
-            
-            return true;
+            return node.Parent == null || !Physics.CheckSphere(node.Position, 1.0f, obstaclesLayerMask) ? 0 : 3;
+
         }
 
         private static float Heur(PathNode node, PathNode target, MovementProperties properties)
@@ -128,20 +124,36 @@ namespace BaseAI
             //float step = 1f;
             var step = properties.deltaTime * properties.maxSpeed;
 
-            //  Внешний цикл отвечает за длину шага - либо 0 (остаёмся в точке), либо 1 - шагаем вперёд
-            for (var mult = 0; mult <= 1; ++mult)
-                //  Внутренний цикл перебирает углы поворота
+            // Цикл перебирает углы поворота
             for (var angleStep = -properties.angleSteps; angleStep <= properties.angleSteps; ++angleStep)
             {
-                var next = node.SpawnChildren(step * mult, angleStep * properties.rotationAngle, properties.deltaTime);
+                var next = node.SpawnChildren(step, angleStep * properties.rotationAngle, properties.deltaTime);
                 next.Parent = node;
-                //  Точка передаётся по ссылке, т.к. возможно обновление региона, которому она принадлежит
-                if (CheckWalkable(ref next))
+                    //  Точка передаётся по ссылке, т.к. возможно обновление региона, которому она принадлежит
+                switch (CheckWalkable(next))
                 {
-                    yield return next;
-                    Debug.DrawLine(node.Position, next.Position, Color.blue, 10000f, false);
+                    case 0:
+                        break;
+                    case 1:
+                        Debug.DrawLine(node.Position, next.Position, Color.red, 10000f, false);
+                        continue;
+                    case 2:
+                        Debug.DrawLine(node.Position, next.Position, Color.blue, 10000f, false);
+                        continue;
+                    case 3:
+                        Debug.DrawLine(node.Position, next.Position, Color.yellow, 10000f, false);
+                        continue;
                 }
+
+                yield return next;
+                Debug.DrawLine(node.Position, next.Position, Color.green, 10000f, false);
             }
+        }
+
+        public float Distance(PathNode from, PathNode to, MovementProperties movementProperties)
+        {
+            return Vector3.Distance(from.Position, to.Position) // / movementProperties.maxSpeed
+                   + Vector3.Angle(from.Direction, to.Direction) / 360; // / movementProperties.rotationAngle);
         }
 
         /// <summary>
@@ -150,68 +162,13 @@ namespace BaseAI
         /// </summary>
         private bool FindPath(PathNode start, PathNode target, MovementProperties movementProperties, UpdatePathListDelegate updater)
         {
-
-            Debug.Log($"Start distance = {Vector3.Distance(start.Position, target.Position)}");
-            var result = new List<PathNode>();
-
-            var nodes = new SimplePriorityQueue<PathNode>();
-            nodes.Enqueue(start, Vector3.Distance(start.Position, target.Position));
-
-            PathNode res = null;
-
-            var i = 0;
-            var minDist = float.MaxValue;
-            PathNode minDistNode = null;
-            while (nodes.Count > 0 && i < 10000)
-            {
-                i++;
-                var current = nodes.Dequeue();
-                if (Vector3.Distance(current.Position, target.Position) < 5.0)
-                {
-                    res = current;
-                    break;
-                }
-
-                var neighbours = GetNeighbours(current, movementProperties);
-                foreach (var neighbor in neighbours)
-                {
-                    var newDist = Vector3.Distance(neighbor.Position, target.Position);
-                    nodes.Enqueue(neighbor, newDist);
-                    if (newDist < minDist)
-                    {
-                        minDist = newDist;
-                        minDistNode = neighbor;
-                    }
-
-                }
-            }
-
-            if (res == null)
-            {
-                result.Add(minDistNode);
-                Debug.Log($"res == null, minDist = {minDist}");
-            }
-            else
-            {
-                Debug.Log($"i = {i}");
-                while (res != null)
-                {
-                    result.Add(res);
-                    res = res.Parent;
-                }
-
-                result.Reverse();
-            }
-
-            updater(result);
-
-            Debug.Log("Маршрут обновлён");
-            Debug.Log("Финальная точка маршрута : " + result[result.Count - 1].Position.ToString() + "; target : " + target.Position.ToString());
+            var region = сartographer.GetRegion(start);
+            updater(region.FindPath(start, target, movementProperties, this));
             return true;
-
-            //Вызываем обновление пути.Теоретически мы обращаемся к списку из другого потока, надо бы синхронизировать как - то
-
+            //*/
+            //  Вызываем обновление пути. Теоретически мы обращаемся к списку из другого потока, надо бы синхронизировать как-то
         }
+
 
         /// <summary>
         /// Основной метод поиска пути, запускает работу в отдельном потоке. Аккуратно с асинхронностью - мало ли, вроде бы 
@@ -224,15 +181,76 @@ namespace BaseAI
             //Task taskA = new Task(() => FindPath(start, finish, movementProperties, updater));
             //taskA.Start();
             //  Из функции выходим, когда путь будет построен - запустится делегат и обновит список точек
-            FindPath(start, finish, movementProperties, updater);
+            FindPath(start, BuildGlobalRoute(start, finish), movementProperties, updater);
             return true;
         }
 
+
+        // Возвращает точку в следующем регионе
+        public PathNode BuildGlobalRoute(PathNode start, PathNode finish)
+        {
+            var startRegion = сartographer.GetRegion(start);
+            var finishRegion = сartographer.GetRegion(finish);
+
+            if (startRegion == null)
+            {
+                Debug.LogError("Not found started region!");
+                return finish;
+            }
+
+            if (finishRegion == null)
+            {
+                Debug.LogError("Not found finish region!");
+                return finish;
+            }
+
+            if (startRegion == finishRegion)
+            {
+                return finish;
+            }
+
+            var queue = new SimplePriorityQueue<IBaseRegion, float>();
+            queue.Enqueue(startRegion, 0);
+            var visited = new Dictionary<int, IBaseRegion>();
+            visited.Add(startRegion.index, startRegion);
+            while (queue.Count != 0)
+            {
+                var dist = queue.GetPriority(queue.First);
+                var region = queue.Dequeue();
+                foreach (var next in region.Neighbors)
+                {
+                    if (visited.ContainsKey(next.index))
+                        continue;
+                    visited.Add(next.index, region);
+                    queue.Enqueue(next, dist + 1);
+                }
+            }
+
+            if (!visited.ContainsKey(finishRegion.index))
+            {
+                Debug.LogError("Not found path to finish region!");
+                return finish;
+            }
+
+            var nextRegion = finishRegion;
+            while (visited[nextRegion.index] != startRegion)
+            {
+                nextRegion = visited[nextRegion.index];
+            }
+
+            var toCenter = Vector3.Normalize(nextRegion.GetCenter() - start.Position);
+            var collision = nextRegion.Collider.ClosestPoint(start.Position) + toCenter * 3.0f;
+            collision.y = start.Position.y;
+            Debug.DrawLine(collision, collision + Vector3.up * 10, Color.black, 1000000);
+            Debug.Log($"{collision}");
+
+            return new PathNode(collision, start.Direction); // TODO: set correct direction
+        }
         //// Start is called before the first frame update
         void Start()
         {
             //  Инициализируем картографа, ну и всё вроде бы
-            сartographer = new Cartographer(CollidersCollection);
+            сartographer = new Cartographer(gameObject);
             obstaclesLayerMask = 1 << LayerMask.NameToLayer("Obstacles");
             var rend = GetComponent<Renderer>();
             if (rend != null)
